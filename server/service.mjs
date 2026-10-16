@@ -19,7 +19,7 @@ export function createRepoService({
   async function list() {
     const user = await api('user')
     const pages = await api(
-      'user/repos?affiliation=owner&sort=updated&direction=desc&per_page=100',
+      'user/repos?affiliation=owner&sort=pushed&direction=desc&per_page=100',
       { paginate: true },
     )
     const repositories = pages

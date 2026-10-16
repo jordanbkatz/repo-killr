@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Dropdown from './Dropdown.jsx'
 import {
+  compareRepositoryRecency,
+  exactTime,
+  relativeTime,
+  repositoryPushTime,
+} from './repositoryDates.js'
+import {
   ArrowDownWideNarrow,
   ArrowRight,
   ArrowUpRight,
@@ -27,18 +33,6 @@ import {
 } from 'lucide-react'
 
 const PAGE_SIZE = 12
-const relativeTime = (value) => {
-  const days = Math.max(0, Math.floor((Date.now() - new Date(value)) / 86_400_000))
-  if (days === 0) return 'Today'
-  if (days === 1) return 'Yesterday'
-  if (days < 30) return `${days} days ago`
-  if (days < 365) {
-    const months = Math.floor(days / 30)
-    return `${months} ${months === 1 ? 'month' : 'months'} ago`
-  }
-  const years = Math.floor(days / 365)
-  return `${years} ${years === 1 ? 'year' : 'years'} ago`
-}
 const formatSize = (kb = 0) =>
   kb < 1024
     ? `${kb.toLocaleString()} KB`
@@ -445,7 +439,7 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
   )
 }
 
-function RepositoryCard({ repo, checked, onSelect, onReview }) {
+function RepositoryCard({ repo, checked, onSelect, onReview, now }) {
   return (
     <article className={`repo-card ${checked ? 'is-selected' : ''}`}>
       <div className="card-top">
@@ -499,9 +493,13 @@ function RepositoryCard({ repo, checked, onSelect, onReview }) {
             </span>
           )}
           <span>{formatSize(repo.size)}</span>
-          <time dateTime={repo.updatedAt} title={new Date(repo.updatedAt).toLocaleString()}>
-            Updated {relativeTime(repo.updatedAt).toLowerCase()}
-          </time>
+          {repositoryPushTime(repo) !== null ? (
+            <time dateTime={repo.pushedAt} title={`Last code push: ${exactTime(repo.pushedAt)}`}>
+              Pushed {relativeTime(repo.pushedAt, now).toLowerCase()}
+            </time>
+          ) : (
+            <span>Push date unavailable</span>
+          )}
         </div>
         <button
           className="icon-button row-delete"
@@ -558,6 +556,7 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 760px)').matches)
   const [history, setHistory] = useState([])
   const [toast, setToast] = useState('')
+  const [now, setNow] = useState(() => Date.now())
   const token = useRef('')
   const currentUser = useRef(null)
   const searchRef = useRef(null)
@@ -566,6 +565,7 @@ export default function App() {
   const api = useCallback(async (path, options = {}) => {
     const response = await fetch(path, {
       method: options.method || 'GET',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json', 'X-Repo-Killr-Token': token.current },
       ...(options.body ? { body: JSON.stringify(options.body) } : {}),
     })
@@ -624,6 +624,26 @@ export default function App() {
   useEffect(() => {
     loadRepositories()
   }, [loadRepositories])
+  useEffect(() => {
+    const updateClock = () => setNow(Date.now())
+    const timer = window.setInterval(updateClock, 60_000)
+    document.addEventListener('visibilitychange', updateClock)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', updateClock)
+    }
+  }, [])
+  useEffect(() => {
+    const sync = () => {
+      if (!modal && document.visibilityState === 'visible') loadRepositories(true)
+    }
+    const timer = window.setInterval(sync, 5 * 60_000)
+    window.addEventListener('focus', sync)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', sync)
+    }
+  }, [loadRepositories, modal])
   useEffect(() => {
     setPage(1)
   }, [query, filter, sort, view])
@@ -703,10 +723,10 @@ export default function App() {
           sort === 'name'
             ? a.name.localeCompare(b.name)
             : sort === 'oldest'
-              ? new Date(a.updatedAt) - new Date(b.updatedAt)
+              ? compareRepositoryRecency(a, b, true)
               : sort === 'size'
                 ? b.size - a.size
-                : new Date(b.updatedAt) - new Date(a.updatedAt),
+                : compareRepositoryRecency(a, b),
         ),
     [repositories, selected, query, filter, sort, view],
   )
@@ -979,7 +999,7 @@ export default function App() {
                         {entry.status === 'deleted' ? 'Deleted' : 'Not deleted'}
                       </span>
                       <time dateTime={entry.at} title={new Date(entry.at).toLocaleString()}>
-                        {relativeTime(entry.at)}
+                        {relativeTime(entry.at, now)}
                       </time>
                     </div>
                   ))
@@ -1033,8 +1053,8 @@ export default function App() {
                       onChange={setSort}
                       icon={<ArrowDownWideNarrow size={16} />}
                       options={[
-                        { value: 'updated', label: 'Recently updated' },
-                        { value: 'oldest', label: 'Least recently updated' },
+                        { value: 'updated', label: 'Recently pushed' },
+                        { value: 'oldest', label: 'Least recently pushed' },
                         { value: 'name', label: 'Name: A to Z' },
                         { value: 'size', label: 'Largest first' },
                       ]}
@@ -1116,6 +1136,7 @@ export default function App() {
                           checked={selected.has(repo.id)}
                           onSelect={() => toggleRepo(repo.id)}
                           onReview={() => review([repo])}
+                          now={now}
                         />
                       ))}
                     </div>

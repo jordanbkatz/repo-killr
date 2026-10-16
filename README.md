@@ -79,6 +79,8 @@ The trash button on an individual card opens the same confirmation popup. Select
 
 Use **Sync GitHub** to reload the repository list after changes on GitHub. Press `/` to focus search. Custom dropdowns support arrow keys, Home, End, Enter, and Escape.
 
+Repository recency uses GitHub’s actual last-push timestamp (`pushed_at`), rather than metadata changes (`updated_at`). Cards and recency sorting use the same timestamp; hover over a card’s push date to see the exact date, time, and timezone. Relative labels refresh every minute. The repository data refreshes when the window regains focus and every five minutes while visible, unless a popup is open.
+
 ## Connection troubleshooting
 
 ### The app cannot find GitHub CLI
