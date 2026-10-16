@@ -6,13 +6,16 @@ import { createApiMiddleware } from './api.mjs'
 
 test('local API blocks cross-origin mutations, missing session tokens, and invalid hosts', async (t) => {
   let confirmed = 0
+  let confirmedAction
   const middleware = createApiMiddleware({
     api: async () => ({ id: 7, login: 'test-owner' }),
     service: {
       active: () => null,
       list: async () => ({ repositories: [] }),
-      start: () => {
+      prepare: async (ids, action) => ({ id: 'mock-plan', action, ids }),
+      start: (id, action = 'delete') => {
         confirmed++
+        confirmedAction = action
         return { id: 'mock-job' }
       },
     },
@@ -81,4 +84,50 @@ test('local API blocks cross-origin mutations, missing session tokens, and inval
     202,
   )
   assert.equal(confirmed, 1)
+  const archiveHeaders = {
+    'Content-Type': 'application/json',
+    'X-Repo-Killr-Token': session.sessionToken,
+    Origin: base,
+  }
+  assert.equal(
+    (
+      await fetch(`${base}/api/archives/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+    ).status,
+    403,
+  )
+  assert.equal(
+    (
+      await fetch(`${base}/api/archives/confirm`, {
+        method: 'POST',
+        headers: { ...archiveHeaders, Origin: 'https://attacker.example' },
+        body: '{}',
+      })
+    ).status,
+    403,
+  )
+  const plan = await (
+    await fetch(`${base}/api/archives/prepare`, {
+      method: 'POST',
+      headers: archiveHeaders,
+      body: JSON.stringify({ repositoryIds: [1] }),
+    })
+  ).json()
+  assert.equal(plan.action, 'archive')
+  assert.deepEqual(plan.ids, [1])
+  assert.equal(
+    (
+      await fetch(`${base}/api/archives/confirm`, {
+        method: 'POST',
+        headers: archiveHeaders,
+        body: JSON.stringify({ planId: plan.id }),
+      })
+    ).status,
+    202,
+  )
+  assert.equal(confirmed, 2)
+  assert.equal(confirmedAction, 'archive')
 })

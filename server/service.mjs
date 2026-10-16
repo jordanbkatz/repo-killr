@@ -29,8 +29,10 @@ export function createRepoService({
     return { user: publicUser(user), repositories, syncedAt: new Date(now()).toISOString() }
   }
 
-  async function prepare(ids) {
+  async function prepare(ids, action = 'delete') {
     prune()
+    if (!['delete', 'archive'].includes(action))
+      throw new ApiError('Unsupported repository action.')
     if (
       !Array.isArray(ids) ||
       !ids.length ||
@@ -44,9 +46,11 @@ export function createRepoService({
     const { user, repositories } = await list()
     const byId = new Map(repositories.map((repo) => [repo.id, repo]))
     const selected = ids.map((id) => byId.get(id))
-    if (selected.some((repo) => !repo || !repo.canDelete)) {
+    if (
+      selected.some((repo) => !repo || !(action === 'archive' ? repo.canArchive : repo.canDelete))
+    ) {
       throw new ApiError(
-        'A selected repository is unavailable or you do not have permission to delete it. Refresh your list.',
+        `A selected repository is unavailable, ${action === 'archive' ? 'already archived, ' : ''}or you do not have permission to ${action} it. Refresh your list.`,
         409,
       )
     }
@@ -55,6 +59,7 @@ export function createRepoService({
       userId: user.id,
       login: user.login,
       repositories: selected,
+      action,
       expiresAt: now() + 5 * 60_000,
     }
     plans.set(plan.id, plan)
@@ -63,7 +68,7 @@ export function createRepoService({
 
   async function run(job, plan) {
     try {
-      // Validate the entire batch before making the first destructive request.
+      // Validate the entire batch before changing any repositories.
       const user = await api('user')
       if (user.id !== plan.userId || user.login !== plan.login)
         throw new ApiError(
@@ -80,17 +85,17 @@ export function createRepoService({
           current.disabled
         ) {
           throw new ApiError(
-            `Permissions or identity changed for ${repo.fullName}. No repositories were deleted. Refresh and review again.`,
+            `Permissions or identity changed for ${repo.fullName}. No repositories were ${plan.action === 'archive' ? 'archived' : 'deleted'}. Refresh and review again.`,
             409,
           )
         }
       }
-      job.phase = 'deleting'
+      job.phase = plan.action === 'archive' ? 'archiving' : 'deleting'
       for (let index = 0; index < plan.repositories.length; index++) {
         const repo = plan.repositories[index]
         job.current = repo.fullName
         try {
-          // Recheck immediately before DELETE to detect renames/transfers during a large batch.
+          // Recheck immediately before each mutation to detect renames or transfers.
           const current = await api(`repos/${repo.fullName}`)
           if (
             current.id !== repo.id ||
@@ -103,11 +108,22 @@ export function createRepoService({
               409,
             )
           }
-          await api(`repos/${repo.fullName}`, { method: 'DELETE' })
+          if (plan.action === 'archive') {
+            const updated = current.archived
+              ? current
+              : await api(`repos/${repo.fullName}`, { method: 'PATCH', fields: { archived: true } })
+            if (updated?.id !== repo.id || updated.archived !== true)
+              throw new ApiError(
+                'GitHub did not confirm that the repository was archived. Refresh before retrying.',
+                502,
+              )
+          } else {
+            await api(`repos/${repo.fullName}`, { method: 'DELETE' })
+          }
           job.results.push({
             id: repo.id,
             fullName: repo.fullName,
-            status: 'deleted',
+            status: plan.action === 'archive' ? 'archived' : 'deleted',
             size: repo.size,
           })
         } catch (error) {
@@ -148,7 +164,7 @@ export function createRepoService({
     }
   }
 
-  function start(id) {
+  function start(id, action = 'delete') {
     prune()
     const plan = plans.get(id)
     if (!plan)
@@ -156,8 +172,13 @@ export function createRepoService({
         'This confirmation expired or was already used. Close it and review your selection again.',
         409,
       )
+    if (plan.action !== action)
+      throw new ApiError(
+        'This confirmation belongs to a different action. Review your selection again.',
+        409,
+      )
     if (activeJob)
-      throw new ApiError('Another deletion is in progress. Wait for it to finish.', 409)
+      throw new ApiError('Another repository action is in progress. Wait for it to finish.', 409)
     plans.delete(id)
     const job = {
       id: randomUUID(),
@@ -166,6 +187,7 @@ export function createRepoService({
       results: [],
       userId: plan.userId,
       login: plan.login,
+      action: plan.action,
       startedAt: now(),
       current: null,
       finishedAt: null,
@@ -181,7 +203,7 @@ export function createRepoService({
     const job = jobs.get(id)
     if (!job)
       throw new ApiError(
-        'This deletion session is no longer available. Refresh your repositories to check their current state.',
+        'This action session is no longer available. Refresh your repositories to check their current state.',
         404,
       )
     return job

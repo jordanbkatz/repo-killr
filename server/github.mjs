@@ -11,7 +11,7 @@ export class ApiError extends Error {
 }
 
 // gh reads its existing OS-keychain credentials. No token enters this app's files or browser.
-export async function githubApi(path, { method = 'GET', paginate = false } = {}) {
+export async function githubApi(path, { method = 'GET', paginate = false, fields } = {}) {
   const args = [
     'api',
     '--hostname',
@@ -25,6 +25,9 @@ export async function githubApi(path, { method = 'GET', paginate = false } = {})
     'X-GitHub-Api-Version: 2022-11-28',
   ]
   if (paginate) args.push('--paginate', '--slurp')
+  // --field encodes booleans as JSON booleans, rather than the strings used by --raw-field.
+  if (fields)
+    for (const [key, value] of Object.entries(fields)) args.push('--field', `${key}=${value}`)
   try {
     const { stdout } = await execute(process.env.GH_PATH || 'gh', args, {
       timeout: paginate ? 120_000 : 30_000,
@@ -51,7 +54,9 @@ export async function githubApi(path, { method = 'GET', paginate = false } = {})
       )
     if (/HTTP 403/.test(detail))
       throw new ApiError(
-        'GitHub denied this request. Deletion requires repository admin access and the delete_repo scope. Run gh auth refresh -h github.com -s delete_repo if needed.',
+        method === 'PATCH'
+          ? 'GitHub denied archiving. Repository admin access and the repo scope are required. Run gh auth refresh -h github.com -s repo if needed.'
+          : 'GitHub denied this request. Deletion requires repository admin access and the delete_repo scope. Run gh auth refresh -h github.com -s delete_repo if needed.',
         403,
       )
     if (/HTTP 404/.test(detail))
@@ -95,5 +100,6 @@ export function publicRepo(repo) {
     createdAt: repo.created_at,
     url: repo.html_url,
     canDelete: repo.permissions?.admin === true && !repo.disabled,
+    canArchive: repo.permissions?.admin === true && !repo.disabled && !repo.archived,
   }
 }

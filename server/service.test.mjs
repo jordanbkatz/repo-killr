@@ -14,7 +14,12 @@ const repo = (id, overrides = {}) => ({
   ...overrides,
 })
 
-function fixture({ repos = [repo(1), repo(2)], deleteError } = {}) {
+function fixture({
+  repos = [repo(1), repo(2)],
+  deleteError,
+  patchError,
+  patchReturnsUnchanged = false,
+} = {}) {
   const calls = []
   const state = {
     user: { ...user },
@@ -22,7 +27,11 @@ function fixture({ repos = [repo(1), repo(2)], deleteError } = {}) {
     metadata: new Map(repos.map((item) => [item.full_name, item])),
   }
   const api = async (path, options = {}) => {
-    calls.push({ path, method: options.method || 'GET' })
+    calls.push({
+      path,
+      method: options.method || 'GET',
+      ...(options.fields ? { fields: options.fields } : {}),
+    })
     if (options.method === 'DELETE') {
       if (deleteError) deleteError(path)
       return null
@@ -34,6 +43,12 @@ function fixture({ repos = [repo(1), repo(2)], deleteError } = {}) {
     }
     const item = state.metadata.get(path.replace('repos/', ''))
     if (!item) throw new ApiError('Repository unavailable.', 404)
+    if (options.method === 'PATCH') {
+      if (patchError) patchError(path)
+      assert.deepEqual(options.fields, { archived: true })
+      if (patchReturnsUnchanged) return { ...item, archived: false }
+      item.archived = true
+    }
     return item
   }
   let time = 1000
@@ -162,4 +177,122 @@ test('only one batch can run at a time', async () => {
   const job = service.start(first.id)
   assert.throws(() => service.start(second.id), /in progress/)
   await finish(service, job)
+})
+
+test('archive availability excludes archived, disabled, and non-admin repositories', async () => {
+  const { service } = fixture({
+    repos: [
+      repo(1),
+      repo(2, { archived: true }),
+      repo(3, { disabled: true }),
+      repo(4, { permissions: { admin: false } }),
+    ],
+  })
+  const { repositories } = await service.list()
+  assert.deepEqual(
+    repositories.map((item) => item.canArchive),
+    [true, false, false, false],
+  )
+  assert.equal(repositories[1].canDelete, true)
+  for (const ids of [[2], [3], [4], [999]]) await assert.rejects(service.prepare(ids, 'archive'))
+  await assert.rejects(service.prepare([1], 'unsupported'))
+})
+
+test('archive confirmation sends PATCH with archived true and never deletes repositories', async () => {
+  const { service, calls, state, deletes } = fixture({ repos: [repo(1), repo(2), repo(3)] })
+  const plan = await service.prepare([1, 3], 'archive')
+  assert.equal(calls.filter((call) => call.method === 'PATCH').length, 0)
+  const job = await finish(service, service.start(plan.id, 'archive'))
+  assert.equal(job.action, 'archive')
+  assert.deepEqual(
+    job.results.map((result) => result.status),
+    ['archived', 'archived'],
+  )
+  assert.deepEqual(
+    calls
+      .filter((call) => call.method === 'PATCH')
+      .map((call) => ({ path: call.path, fields: call.fields })),
+    [
+      { path: 'repos/test-owner/repo-1', fields: { archived: true } },
+      { path: 'repos/test-owner/repo-3', fields: { archived: true } },
+    ],
+  )
+  assert.equal(deletes().length, 0)
+  assert.equal(state.repos.length, 3)
+  assert.deepEqual(
+    state.repos.map((item) => Boolean(item.archived)),
+    [true, false, true],
+  )
+  assert.throws(() => service.start(plan.id, 'archive'), /already used/)
+})
+
+test('an archive plan cannot be used for deletion, and a delete plan cannot be used for archiving', async () => {
+  const { service, calls } = fixture()
+  const archive = await service.prepare([1], 'archive')
+  const deletion = await service.prepare([2])
+  assert.throws(() => service.start(archive.id), /different action/)
+  assert.throws(() => service.start(deletion.id, 'archive'), /different action/)
+  assert.equal(calls.filter((call) => ['PATCH', 'DELETE'].includes(call.method)).length, 0)
+  assert.equal(
+    (await finish(service, service.start(archive.id, 'archive'))).results[0].status,
+    'archived',
+  )
+  assert.equal((await finish(service, service.start(deletion.id))).results[0].status, 'deleted')
+})
+
+test('expired archive confirmations cannot mutate repositories', async () => {
+  const { service, calls, advance } = fixture()
+  const plan = await service.prepare([1], 'archive')
+  advance(300_001)
+  assert.throws(() => service.start(plan.id, 'archive'), /expired/)
+  assert.equal(calls.filter((call) => call.method === 'PATCH').length, 0)
+})
+
+test('account changes and ownership transfers stop an archive batch before its first PATCH', async () => {
+  for (const transfer of [false, true]) {
+    const { service, state, calls } = fixture()
+    const plan = await service.prepare([1, 2], 'archive')
+    if (transfer) state.metadata.set('test-owner/repo-2', repo(2, { owner: { id: 99 } }))
+    else state.user = { id: 99, login: 'other-account' }
+    const job = await finish(service, service.start(plan.id, 'archive'))
+    assert.ok(job.results.every((result) => result.status === 'failed'))
+    assert.equal(calls.filter((call) => ['PATCH', 'DELETE'].includes(call.method)).length, 0)
+  }
+})
+
+test('archive partial failures preserve accurate per-repository outcomes', async () => {
+  const { service, deletes } = fixture({
+    repos: [repo(1), repo(2), repo(3)],
+    patchError: (path) => {
+      if (path.endsWith('repo-2')) throw new ApiError('Repository unavailable.', 404)
+    },
+  })
+  const plan = await service.prepare([1, 2, 3], 'archive')
+  const job = await finish(service, service.start(plan.id, 'archive'))
+  assert.deepEqual(
+    job.results.map((result) => result.status),
+    ['archived', 'failed', 'archived'],
+  )
+  assert.equal(deletes().length, 0)
+})
+
+test('archive rate limits stop the remaining batch', async () => {
+  const { service, calls } = fixture({
+    patchError: () => {
+      throw new ApiError('Rate limited.', 429)
+    },
+  })
+  const plan = await service.prepare([1, 2], 'archive')
+  const job = await finish(service, service.start(plan.id, 'archive'))
+  assert.equal(calls.filter((call) => call.method === 'PATCH').length, 1)
+  assert.ok(job.results.every((result) => result.status === 'failed'))
+})
+
+test('GitHub must confirm archived true before success is reported', async () => {
+  const { service, deletes } = fixture({ patchReturnsUnchanged: true })
+  const plan = await service.prepare([1], 'archive')
+  const job = await finish(service, service.start(plan.id, 'archive'))
+  assert.equal(job.results[0].status, 'failed')
+  assert.match(job.results[0].message, /did not confirm/)
+  assert.equal(deletes().length, 0)
 })

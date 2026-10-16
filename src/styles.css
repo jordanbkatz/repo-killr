@@ -351,12 +351,12 @@ main {
   border-color: #98a2b3;
 }
 .button.dark,
-.selection-delete {
+.selection-archive {
   background: var(--blue);
   color: #fff;
 }
 .button.dark:hover,
-.selection-delete:hover {
+.selection-archive:hover {
   background: var(--blue-hover);
 }
 .button.danger {
@@ -763,6 +763,15 @@ main {
   background: #fef3f2;
   color: #d92d20;
 }
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.row-archive:hover:not(:disabled) {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
 .table-footer {
   display: flex;
   align-items: center;
@@ -870,6 +879,15 @@ main {
   background: var(--line);
 }
 .selection-delete {
+  white-space: nowrap;
+  color: #b42318;
+  border-color: #fecdca;
+  background: #fff;
+}
+.selection-delete:hover {
+  background: #fef3f2;
+}
+.selection-archive {
   white-space: nowrap;
 }
 .app-shell:has(.selection-toolbar) main {
@@ -1033,7 +1051,8 @@ main {
   font-size: 14px;
   white-space: nowrap;
 }
-.status-pill.deleted {
+.status-pill.deleted,
+.status-pill.archived {
   color: #1d4ed8;
   background: var(--blue-soft);
 }
@@ -1185,6 +1204,25 @@ main {
   border-top: 1px solid var(--line);
   margin-top: 26px;
   padding-top: 22px;
+}
+.archive-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  border-radius: 7px;
+  color: #1e40af;
+  margin-bottom: 22px;
+}
+.archive-note > svg {
+  margin-top: 2px;
+}
+.archive-note p {
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
 }
 .checking {
   display: flex;
@@ -1551,8 +1589,9 @@ main {
   .selection-summary > span {
     font-size: 14px;
   }
-  .selection-delete {
-    width: 100%;
+  .selection-delete,
+  .selection-archive {
+    width: calc(50% - 5px);
   }
   .clear-long {
     display: none;

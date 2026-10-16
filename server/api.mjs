@@ -41,7 +41,7 @@ export function createApiMiddleware({ service = createRepoService(), api = githu
         throw new ApiError('Your local session expired. Refresh the page and try again.', 403)
       if (req.method === 'GET' && path === '/api/repositories')
         return send(res, 200, await service.list())
-      const jobMatch = path.match(/^\/api\/deletions\/([a-f0-9-]+)$/)
+      const jobMatch = path.match(/^\/api\/(?:deletions|archives)\/([a-f0-9-]+)$/)
       if (req.method === 'GET' && jobMatch) return send(res, 200, service.getJob(jobMatch[1]))
       if (req.method === 'POST') {
         if (!String(req.headers['content-type'] || '').startsWith('application/json'))
@@ -63,6 +63,10 @@ export function createApiMiddleware({ service = createRepoService(), api = githu
         if (path === '/api/deletions/prepare')
           return send(res, 200, await service.prepare(body.repositoryIds))
         if (path === '/api/deletions/confirm') return send(res, 202, service.start(body.planId))
+        if (path === '/api/archives/prepare')
+          return send(res, 200, await service.prepare(body.repositoryIds, 'archive'))
+        if (path === '/api/archives/confirm')
+          return send(res, 202, service.start(body.planId, 'archive'))
       }
       throw new ApiError('This endpoint does not exist.', 404)
     } catch (error) {

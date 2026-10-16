@@ -1,6 +1,6 @@
 # Repo Killr
 
-A local app for searching, selecting, and deleting your GitHub repositories. Built with React and Vite, with a responsive repository grid, custom dropdowns, and a custom deletion confirmation popup.
+A local app for searching, selecting, archiving, and deleting your GitHub repositories. Built with React and Vite, with a responsive repository grid, custom dropdowns, and custom confirmation popups.
 
 ## Requirements
 
@@ -69,11 +69,13 @@ Vite updates the browser automatically when you edit React components or CSS. Th
 
 1. **Find repositories.** Search by name, description, or language. Use the Public, Private, Archived, and Forks filters, or change the sort order.
 2. **Select repositories.** Check individual cards or use **Select this page**. When a page is selected, you can also select all matching repositories. Selections are kept while searching, filtering, and moving between pages.
-3. **Review the selection.** Open **Selected** in the sidebar, or click **Review & delete** in the selection toolbar. The popup shows the exact repositories you are about to delete.
-4. **Confirm deletion.** Click **Confirm delete** at the bottom of the popup. No typing or extra checkbox is required. Use **Cancel**, the close button, or Escape to dismiss the popup before confirming.
-5. **Check the result.** Each repository gets a success or failure result. Failed repositories stay selected so you can review them. **Activity** shows deletion results saved in this browser.
+3. **Choose an action.** Open **Selected** in the sidebar, then choose **Archive** or **Delete** in the selection toolbar. The popup shows the exact repositories affected.
+4. **Confirm the action.** Click **Confirm archive** or **Confirm delete** at the bottom of the popup. No typing or extra checkbox is required. Use **Cancel**, the close button, or Escape to dismiss the popup before confirming.
+5. **Check the result.** Each repository gets a success or failure result. Failed repositories stay selected so you can review them. **Activity** shows archive and deletion results saved in this browser.
 
-The trash button on an individual card opens the same confirmation popup. Selecting repositories or opening the popup does not delete anything.
+The archive and trash buttons on each card open action-specific confirmation popups. Selecting repositories or opening a popup does not change anything on GitHub.
+
+**Archiving keeps the repository and its history, and makes it read-only.** Archived repositories stay in the grid with an Archived badge and are available through the Archived filter. Already archived repositories are excluded from archive batches. You can unarchive a repository later in GitHub settings. Archiving needs admin access and the `repo` scope; it does not need the `delete_repo` scope. Archive results appear in Activity alongside deletions.
 
 **Deletion removes the repository and its associated code, issues, pull requests, releases, and settings from GitHub. There is no undo in Repo Killr. Local clones on your computer are not deleted.**
 
@@ -150,7 +152,7 @@ If you use PM2 Manager, add the project folder with command `NODE_ENV=developmen
 
 The browser calls the local API defined in `server/api.mjs`. That API invokes `gh api` through `server/github.mjs`, using the active `github.com` CLI account. Repository pages are loaded from GitHub and searched, filtered, sorted, and paginated locally.
 
-Each deletion confirmation is tied to the reviewed selection, expires after five minutes, and can be used once. Before deletion, the server verifies the account, repository identities, ownership, and permissions. Batches run sequentially; authentication failures and rate limits stop the remaining batch. Reloading the page reconnects to a running batch while the server remains running.
+Each archive or deletion confirmation is tied to the reviewed selection, expires after five minutes, and can be used once. Before archiving or deleting, the server verifies the account, repository identities, ownership, and permissions. Batches run sequentially; authentication failures and rate limits stop the remaining batch. Reloading the page reconnects to a running batch while the server remains running.
 
 The server binds to loopback, restricts hosts and origins, and requires a local session token for protected API requests. Activity is stored in browser local storage separately for each account; it contains repository names and outcomes, not credentials.
 

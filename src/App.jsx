@@ -160,10 +160,10 @@ function HelpModal({ onClose }) {
         <div>
           <span>03</span>
           <section>
-            <h3>Confirm deletion</h3>
+            <h3>Archive or delete</h3>
             <p>
-              Review the repositories in the popup, then click Confirm delete. Deletion removes the
-              repository and its associated data from GitHub.
+              Choose Archive to keep a read-only repository, or Delete to remove it. Review the
+              popup, then click its confirmation button.
             </p>
           </section>
         </div>
@@ -182,7 +182,14 @@ function HelpModal({ onClose }) {
   )
 }
 
-function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) {
+function RepositoryActionModal({
+  repositories,
+  resumeJobId,
+  api,
+  onClose,
+  onComplete,
+  action = 'delete',
+}) {
   const [plan, setPlan] = useState(null)
   const [preparing, setPreparing] = useState(!resumeJobId)
   const [submitting, setSubmitting] = useState(false)
@@ -194,13 +201,16 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
   const completeRef = useRef(onComplete)
   completeRef.current = onComplete
   const busy = submitting || Boolean(job && job.phase !== 'complete')
-  const succeeded = job?.results.filter((result) => result.status === 'deleted') || []
+  const isArchive = (job?.action || action) === 'archive'
+  const completedWord = isArchive ? 'archived' : 'deleted'
+  const endpoint = action === 'archive' ? 'archives' : 'deletions'
+  const succeeded = job?.results.filter((result) => result.status === completedWord) || []
   const failed = job?.results.filter((result) => result.status === 'failed') || []
 
   useEffect(() => {
     if (resumeJobId) return
     let cancelled = false
-    api('/api/deletions/prepare', {
+    api(`/api/${endpoint}/prepare`, {
       method: 'POST',
       body: { repositoryIds: repositories.map((repo) => repo.id) },
     })
@@ -216,7 +226,7 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
     return () => {
       cancelled = true
     }
-  }, [api, repositories, resumeJobId])
+  }, [api, repositories, resumeJobId, endpoint])
 
   useEffect(() => {
     if (!job?.id) return
@@ -224,7 +234,7 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
     let timer
     async function poll() {
       try {
-        const data = await api(`/api/deletions/${job.id}`)
+        const data = await api(`/api/${endpoint}/${job.id}`)
         if (cancelled) return
         setJob(data)
         setError('')
@@ -242,7 +252,7 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
           setError(err.message)
           return
         }
-        setError('Connection interrupted. Checking the deletion status again…')
+        setError('Connection interrupted. Checking the action status again…')
       }
       if (!cancelled) timer = window.setTimeout(poll, 1200)
     }
@@ -251,14 +261,14 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [job?.id, api])
+  }, [job?.id, api, endpoint])
 
   async function confirm() {
     if (!plan || preparing || busy) return
     setSubmitting(true)
     setError('')
     try {
-      setJob(await api('/api/deletions/confirm', { method: 'POST', body: { planId: plan.id } }))
+      setJob(await api(`/api/${endpoint}/confirm`, { method: 'POST', body: { planId: plan.id } }))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -268,13 +278,9 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
 
   if (job)
     return (
-      <Modal onClose={onClose} busy={busy} labelledBy="delete-title" className="delete-dialog">
+      <Modal onClose={onClose} busy={busy} labelledBy="action-title" className="delete-dialog">
         {!busy && (
-          <button
-            className="icon-button dialog-close"
-            onClick={onClose}
-            aria-label="Close deletion results"
-          >
+          <button className="icon-button dialog-close" onClick={onClose} aria-label="Close results">
             <X size={19} />
           </button>
         )}
@@ -289,21 +295,25 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
             <CheckCheck size={26} />
           )}
         </span>
-        <h2 id="delete-title">
+        <h2 id="action-title">
           {busy
             ? job.phase === 'validating'
               ? 'Verifying repositories…'
-              : 'Deleting repositories…'
+              : isArchive
+                ? 'Archiving repositories…'
+                : 'Deleting repositories…'
             : job.error
               ? 'Cleanup needs attention.'
               : failed.length
-                ? 'Some repositories were not deleted.'
-                : 'Deletion complete.'}
+                ? `Some repositories were not ${completedWord}.`
+                : isArchive
+                  ? 'Archive complete.'
+                  : 'Deletion complete.'}
         </h2>
         <p className="dialog-description">
           {busy
             ? 'Keep this window open. We’re checking each repository and processing your selection.'
-            : `${succeeded.length} ${succeeded.length === 1 ? 'repository' : 'repositories'} deleted${failed.length ? ` · ${failed.length} not deleted` : ''}. Your repository list has been updated.`}
+            : `${succeeded.length} ${succeeded.length === 1 ? 'repository' : 'repositories'} ${completedWord}${failed.length ? ` · ${failed.length} not ${completedWord}` : ''}. Your repository list has been updated.`}
         </p>
         {busy && (
           <div className="progress-section">
@@ -340,8 +350,8 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
           <div className="result-list">
             {job.results.map((result) => (
               <div key={result.id}>
-                <span className={result.status === 'deleted' ? 'result-success' : 'result-failure'}>
-                  {result.status === 'deleted' ? (
+                <span className={result.status !== 'failed' ? 'result-success' : 'result-failure'}>
+                  {result.status !== 'failed' ? (
                     <CircleCheck size={18} />
                   ) : (
                     <CircleAlert size={18} />
@@ -352,7 +362,11 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
                   {result.message && <p>{result.message}</p>}
                 </section>
                 <span className="result-status">
-                  {result.status === 'deleted' ? 'Deleted' : 'Not deleted'}
+                  {result.status === 'failed'
+                    ? `Not ${completedWord}`
+                    : isArchive
+                      ? 'Archived'
+                      : 'Deleted'}
                 </span>
               </div>
             ))}
@@ -367,25 +381,25 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
     )
 
   return (
-    <Modal onClose={onClose} busy={busy} labelledBy="delete-title" className="delete-dialog">
+    <Modal onClose={onClose} busy={busy} labelledBy="action-title" className="delete-dialog">
       <button
         className="icon-button dialog-close"
         onClick={onClose}
         disabled={busy}
-        aria-label="Cancel deletion"
+        aria-label={`Cancel ${isArchive ? 'archiving' : 'deletion'}`}
       >
         <X size={19} />
       </button>
-      <span className="dialog-icon red">
-        <Trash2 size={25} />
+      <span className={`dialog-icon ${isArchive ? 'blue' : 'red'}`}>
+        {isArchive ? <Archive size={25} /> : <Trash2 size={25} />}
       </span>
-      <h2 id="delete-title">Delete repositories?</h2>
+      <h2 id="action-title">{isArchive ? 'Archive repositories?' : 'Delete repositories?'}</h2>
       <p className="dialog-description">
-        You’re about to permanently delete{' '}
+        {isArchive ? 'You’re about to archive ' : 'You’re about to permanently delete '}
         <strong>
           {repositories.length} {repositories.length === 1 ? 'repository' : 'repositories'}
         </strong>{' '}
-        from GitHub. Review your selection before continuing.
+        {isArchive ? 'on' : 'from'} GitHub. Review your selection before continuing.
       </p>
       <div className="review-list">
         {(plan?.repositories || repositories).map((repo) => (
@@ -403,11 +417,12 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
           </div>
         ))}
       </div>
-      <div className="danger-note">
-        <CircleAlert size={18} />
+      <div className={isArchive ? 'archive-note' : 'danger-note'}>
+        {isArchive ? <Archive size={18} /> : <CircleAlert size={18} />}
         <p>
-          This deletes the code, issues, pull requests, releases, and repository settings. There’s
-          no undo in Repo Killr.
+          {isArchive
+            ? 'Archiving makes repositories read-only and keeps their code and history. You can unarchive them later in GitHub settings.'
+            : 'This deletes the code, issues, pull requests, releases, and repository settings. There’s no undo in Repo Killr.'}
         </p>
       </div>
       {preparing && (
@@ -427,19 +442,25 @@ function DeletionModal({ repositories, resumeJobId, api, onClose, onComplete }) 
         </button>
         <button
           type="button"
-          className="button danger"
+          className={`button ${isArchive ? 'dark' : 'danger'}`}
           onClick={confirm}
           disabled={!plan || preparing || busy}
         >
-          {submitting ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}
-          Confirm delete
+          {submitting ? (
+            <Loader2 size={16} className="spin" />
+          ) : isArchive ? (
+            <Archive size={16} />
+          ) : (
+            <Trash2 size={16} />
+          )}
+          {isArchive ? 'Confirm archive' : 'Confirm delete'}
         </button>
       </div>
     </Modal>
   )
 }
 
-function RepositoryCard({ repo, checked, onSelect, onReview, now }) {
+function RepositoryCard({ repo, checked, onSelect, onReview, onArchive, now }) {
   return (
     <article className={`repo-card ${checked ? 'is-selected' : ''}`}>
       <div className="card-top">
@@ -501,17 +522,34 @@ function RepositoryCard({ repo, checked, onSelect, onReview, now }) {
             <span>Push date unavailable</span>
           )}
         </div>
-        <button
-          className="icon-button row-delete"
-          onClick={onReview}
-          aria-label={`Delete ${repo.name}`}
-          disabled={!repo.canDelete}
-          title={
-            repo.canDelete ? `Review deletion of ${repo.name}` : 'You do not have admin access'
-          }
-        >
-          <Trash2 size={18} />
-        </button>
+        <div className="card-actions">
+          <button
+            className="icon-button row-archive"
+            onClick={onArchive}
+            aria-label={`Archive ${repo.name}`}
+            disabled={!repo.canArchive}
+            title={
+              repo.archived
+                ? 'Already archived'
+                : repo.canArchive
+                  ? `Archive ${repo.name}`
+                  : 'You do not have admin access'
+            }
+          >
+            <Archive size={18} />
+          </button>
+          <button
+            className="icon-button row-delete"
+            onClick={onReview}
+            aria-label={`Delete ${repo.name}`}
+            disabled={!repo.canDelete}
+            title={
+              repo.canDelete ? `Review deletion of ${repo.name}` : 'You do not have admin access'
+            }
+          >
+            <Trash2 size={18} />
+          </button>
+        </div>
       </div>
     </article>
   )
@@ -608,7 +646,7 @@ export default function App() {
         if (session.activeJob)
           setModal(
             (previous) =>
-              previous || { type: 'delete', repositories: [], resumeJobId: session.activeJob },
+              previous || { type: 'action', repositories: [], resumeJobId: session.activeJob },
           )
       } catch (err) {
         setError(err.message)
@@ -738,6 +776,7 @@ export default function App() {
     selectablePage.length > 0 && selectablePage.every((repo) => selected.has(repo.id))
   const somePageSelected = selectablePage.some((repo) => selected.has(repo.id))
   const selectedRepos = repositories.filter((repo) => selected.has(repo.id))
+  const archiveRepos = selectedRepos.filter((repo) => repo.canArchive)
   const selectedSize = selectedRepos.reduce((total, repo) => total + repo.size, 0)
   const hiddenSelected = selectedRepos.filter(
     (repo) => !filtered.some((item) => item.id === repo.id),
@@ -768,23 +807,36 @@ export default function App() {
     }
     setSelected((previous) => new Set([...previous, ...available.map((repo) => repo.id)]))
   }
-  const review = (repos) => {
+  const review = (repos, action = 'delete') => {
     if (repos.length > 500) {
       setToast('Please select 500 or fewer repositories for each cleanup.')
       return
     }
-    setModal({ type: 'delete', repositories: repos })
+    if (!repos.length) return
+    setModal({ type: 'action', action, repositories: repos })
   }
 
   const handleComplete = useCallback((job) => {
     const deleted = new Set(
       job.results.filter((result) => result.status === 'deleted').map((result) => result.id),
     )
-    setRepositories((previous) => previous.filter((repo) => !deleted.has(repo.id)))
-    setSelected((previous) => new Set([...previous].filter((id) => !deleted.has(id))))
+    const archived = new Set(
+      job.results.filter((result) => result.status === 'archived').map((result) => result.id),
+    )
+    setRepositories((previous) =>
+      previous
+        .filter((repo) => !deleted.has(repo.id))
+        .map((repo) =>
+          archived.has(repo.id) ? { ...repo, archived: true, canArchive: false } : repo,
+        ),
+    )
+    setSelected(
+      (previous) => new Set([...previous].filter((id) => !deleted.has(id) && !archived.has(id))),
+    )
     const previous = readHistory(job.userId)
     const entries = job.results.map((result) => ({
       ...result,
+      action: job.action || 'delete',
       jobId: job.id,
       at: new Date(job.finishedAt).toISOString(),
     }))
@@ -795,8 +847,11 @@ export default function App() {
       /* Activity is optional when browser storage is unavailable. */
     }
     if (currentUser.current === job.userId) setHistory(next)
-    if (deleted.size)
-      setToast(`${deleted.size} ${deleted.size === 1 ? 'repository' : 'repositories'} deleted. `)
+    const count = deleted.size + archived.size
+    if (count)
+      setToast(
+        `${count} ${count === 1 ? 'repository' : 'repositories'} ${job.action === 'archive' ? 'archived' : 'deleted'}.`,
+      )
   }, [])
 
   const pageLabel =
@@ -977,9 +1032,11 @@ export default function App() {
                   history.map((entry, index) => (
                     <div className="activity-row" key={`${entry.jobId}-${entry.id}-${index}`}>
                       <span
-                        className={`activity-icon ${entry.status === 'deleted' ? '' : 'failed'}`}
+                        className={`activity-icon ${entry.status !== 'failed' ? '' : 'failed'}`}
                       >
-                        {entry.status === 'deleted' ? (
+                        {entry.status === 'archived' ? (
+                          <Archive size={18} />
+                        ) : entry.status === 'deleted' ? (
                           <Trash2 size={18} />
                         ) : (
                           <CircleAlert size={18} />
@@ -990,13 +1047,19 @@ export default function App() {
                         <p>
                           {entry.status === 'deleted'
                             ? 'Repository permanently deleted'
-                            : entry.message}
+                            : entry.status === 'archived'
+                              ? 'Repository archived'
+                              : entry.message}
                         </p>
                       </div>
-                      <span
-                        className={`status-pill ${entry.status === 'deleted' ? 'deleted' : 'failed'}`}
-                      >
-                        {entry.status === 'deleted' ? 'Deleted' : 'Not deleted'}
+                      <span className={`status-pill ${entry.status}`}>
+                        {entry.status === 'archived'
+                          ? 'Archived'
+                          : entry.status === 'deleted'
+                            ? 'Deleted'
+                            : entry.action === 'archive'
+                              ? 'Not archived'
+                              : 'Not deleted'}
                       </span>
                       <time dateTime={entry.at} title={new Date(entry.at).toLocaleString()}>
                         {relativeTime(entry.at, now)}
@@ -1009,7 +1072,7 @@ export default function App() {
                       <History size={29} strokeWidth={1.5} />
                     </span>
                     <h3>No activity yet.</h3>
-                    <p>Deletion results will appear here.</p>
+                    <p>Archive and deletion results will appear here.</p>
                     <button className="button secondary" onClick={() => navigate('repositories')}>
                       Browse repositories <ArrowRight size={15} />
                     </button>
@@ -1136,6 +1199,7 @@ export default function App() {
                           checked={selected.has(repo.id)}
                           onSelect={() => toggleRepo(repo.id)}
                           onReview={() => review([repo])}
+                          onArchive={() => review([repo], 'archive')}
                           now={now}
                         />
                       ))}
@@ -1205,10 +1269,22 @@ export default function App() {
             Clear<span className="clear-long"> selection</span>
           </button>
           <span className="selection-divider" />
+          <button
+            className="button selection-archive"
+            onClick={() => review(archiveRepos, 'archive')}
+            disabled={!archiveRepos.length}
+            title={
+              archiveRepos.length
+                ? 'Review repositories to archive'
+                : 'Selected repositories are already archived'
+            }
+          >
+            <Archive size={16} />
+            Archive {archiveRepos.length}
+          </button>
           <button className="button selection-delete" onClick={() => review(selectedRepos)}>
             <Trash2 size={16} />
-            <span>Review & delete</span>
-            <ArrowRight size={15} />
+            <span>Delete {selected.size}</span>
           </button>
         </div>
       )}
@@ -1229,9 +1305,10 @@ export default function App() {
         </div>
       )}
       {modal?.type === 'help' && <HelpModal onClose={() => setModal(null)} />}
-      {modal?.type === 'delete' && (
-        <DeletionModal
+      {modal?.type === 'action' && (
+        <RepositoryActionModal
           repositories={modal.repositories}
+          action={modal.action}
           resumeJobId={modal.resumeJobId}
           api={api}
           onComplete={handleComplete}

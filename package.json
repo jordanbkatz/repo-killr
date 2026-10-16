@@ -2,7 +2,7 @@
   "name": "repo-killr",
   "private": true,
   "version": "1.0.0",
-  "description": "A local React and Vite app for searching, selecting, and deleting GitHub repositories through GitHub CLI.",
+  "description": "A local React and Vite app for searching, selecting, archiving, and deleting GitHub repositories through GitHub CLI.",
   "license": "MIT",
   "type": "module",
   "engines": {
